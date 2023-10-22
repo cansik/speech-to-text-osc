@@ -37,11 +37,13 @@ This application sends OSC messages to communicate the recognized speech. The OS
 
 - `/stt/partial-text`: OSC address for partial transcriptions. Messages sent when text is recognized in realtime.
   1. `index`: An integer representing the index of the current sentence.
-  2. `text`: A string containing the recognized partial text.
+  2. `timestamp`: An string representing the start timestamp of the current sentence (ISO 8601 - local-timezone).
+  3. `text`: A string containing the recognized partial text.
 
 - `/stt/text`: OSC address for full transcriptions. Messages sent when a complete sentence or phrase is recognized.
   1. `index`: An integer representing the index of the current sentence.
-  2. `text`: A string containing the recognized complete text.
+  2. `timestamp`: An string representing the start timestamp of the current sentence (ISO 8601 - local-timezone).
+  3. `text`: A string containing the recognized partial text.
 
 
 ### About

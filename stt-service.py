@@ -3,7 +3,7 @@ import argparse
 from pythonosc import udp_client
 from rich.console import Console
 
-from SpeechToTextWhisper import SpeechToTextWhisper, WhisperModel
+from SpeechToTextWhisper import SpeechToTextWhisper, WhisperModel, TextRecognitionEvent
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -32,13 +32,16 @@ def main():
 
     osc_client = udp_client.SimpleUDPClient(args.osc_server, args.osc_port)
 
-    def on_partial_text_recognized(index: int, text: str):
-        osc_client.send_message("/stt/partial-text", [index, text])
-        console.print(f"{text}", style="blue")
+    def on_partial_text_recognized(event: TextRecognitionEvent):
+        osc_client.send_message("/stt/partial-text",
+                                [event.index, event.timestamp.isoformat(), event.text])
+        console.print(f"{event.text}", style="blue")
 
-    def on_text_recognized(index: int, text: str):
-        osc_client.send_message("/stt/text", [index, text])
-        console.print(f"{text}", style="green bold")
+    def on_text_recognized(event: TextRecognitionEvent):
+        osc_client.send_message("/stt/text",
+                                [event.index, event.timestamp.isoformat(), event.text])
+        ts_str = event.timestamp.strftime("%H:%M:%S")
+        console.print(f"{ts_str}: {event.text}", style="green bold")
 
     with console.status(f"starting whisper model {args.model} for language {args.language}"):
         stt_transcriber = SpeechToTextWhisper(model=WhisperModel.from_text(args.model),
@@ -51,6 +54,8 @@ def main():
 
     stt_transcriber.on_text_recognized = on_text_recognized
     stt_transcriber.on_partial_text_recognized = on_partial_text_recognized
+
+    console.print("listening...")
     stt_transcriber.run()
 
 

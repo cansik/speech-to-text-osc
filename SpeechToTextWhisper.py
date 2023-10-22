@@ -1,6 +1,6 @@
 import io
-import os
 import time
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
 from queue import Queue
@@ -28,6 +28,13 @@ class WhisperModel(Enum):
         raise ValueError(f"No matching WhisperModel for model name: {model_name}")
 
 
+@dataclass
+class TextRecognitionEvent:
+    index: int
+    timestamp: datetime
+    text: str
+
+
 class SpeechToTextWhisper:
     def __init__(self, model: WhisperModel,
                  language: str = "en",
@@ -35,7 +42,7 @@ class SpeechToTextWhisper:
                  record_timeout: float = 2.0,
                  phrase_timeout: float = 3.0,
                  device: Optional[Union[str, torch.device]] = None):
-        self.phrase_start_ts: datetime = datetime.utcnow()
+        self.phrase_start_ts: datetime = datetime.now()
         self.last_sample = bytes()
         self.data_queue = Queue()
 
@@ -60,11 +67,12 @@ class SpeechToTextWhisper:
         self._last_sample = bytes()
         self._transcription: str = ""
         self._transcription_id: int = -1
+        self._transcription_start_ts: Optional[datetime] = None
         self._transcription_published: bool = True
 
         # events
-        self.on_text_recognized: Optional[Callable[[int, str], None]] = None
-        self.on_partial_text_recognized: Optional[Callable[[int, str], None]] = None
+        self.on_text_recognized: Optional[Callable[[TextRecognitionEvent], None]] = None
+        self.on_partial_text_recognized: Optional[Callable[[TextRecognitionEvent], None]] = None
 
     def setup(self):
         self.temp_file = NamedTemporaryFile().name
@@ -111,7 +119,7 @@ class SpeechToTextWhisper:
         return text
 
     def _analyze_audio(self):
-        now = datetime.utcnow()
+        now = datetime.now()
 
         # check if new data has arrived
         if self.data_queue.empty():
@@ -119,7 +127,9 @@ class SpeechToTextWhisper:
             if self.phrase_has_timed_out and not self._transcription_published:
                 self._transcription_published = True
                 if self.on_text_recognized is not None and self._transcription != "":
-                    self.on_text_recognized(self._transcription_id, self._transcription)
+                    self.on_text_recognized(
+                        TextRecognitionEvent(self._transcription_id, self._transcription_start_ts, self._transcription)
+                    )
             return
 
         if self.phrase_has_timed_out:
@@ -127,6 +137,7 @@ class SpeechToTextWhisper:
             self._last_sample = bytes()
             self._transcription_published = False
             self._transcription_id += 1
+            self._transcription_start_ts = now
 
         self.phrase_start_ts = now
 
@@ -134,7 +145,9 @@ class SpeechToTextWhisper:
         self._transcription = text
 
         if self.on_partial_text_recognized is not None and text != "":
-            self.on_partial_text_recognized(self._transcription_id, text)
+            self.on_partial_text_recognized(
+                TextRecognitionEvent(self._transcription_id, self._transcription_start_ts, self._transcription)
+            )
 
     def _init_audio(self):
         self.source = sr.Microphone(sample_rate=16000)
@@ -173,5 +186,5 @@ class SpeechToTextWhisper:
 
     @property
     def phrase_has_timed_out(self) -> bool:
-        now = datetime.utcnow()
+        now = datetime.now()
         return now - self.phrase_start_ts > timedelta(seconds=self.phrase_timeout)
