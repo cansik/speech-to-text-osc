@@ -35,7 +35,7 @@ class SpeechToTextWhisper:
                  record_timeout: float = 2.0,
                  phrase_timeout: float = 3.0,
                  device: Optional[Union[str, torch.device]] = None):
-        self.phrase_time: Optional[float] = None
+        self.phrase_start_ts: datetime = datetime.utcnow()
         self.last_sample = bytes()
         self.data_queue = Queue()
 
@@ -58,10 +58,13 @@ class SpeechToTextWhisper:
         self._running = False
 
         self._last_sample = bytes()
+        self._transcription: str = ""
+        self._transcription_id: int = -1
+        self._transcription_published: bool = True
 
         # events
-        self.on_text_recognized: Optional[Callable[[str], None]] = None
-        self.on_phrase_recognized: Optional[Callable[[str], None]] = None
+        self.on_text_recognized: Optional[Callable[[int, str], None]] = None
+        self.on_partial_text_recognized: Optional[Callable[[int, str], None]] = None
 
     def setup(self):
         self.temp_file = NamedTemporaryFile().name
@@ -74,6 +77,11 @@ class SpeechToTextWhisper:
         Run text to speech recognition. Blocks until canceled.
         """
         self._running = True
+
+        # init variables
+        self._last_sample = bytes()
+
+        # run loop (blocking)
         while self._running:
             try:
                 self._analyze_audio()
@@ -84,20 +92,7 @@ class SpeechToTextWhisper:
     def stop(self):
         self._running = False
 
-    def _analyze_audio(self):
-        now = datetime.utcnow()
-
-        if self.data_queue.empty():
-            return
-
-        phrase_complete = False
-
-        if self.phrase_time is not None and now - self.phrase_time > timedelta(seconds=self.phrase_timeout):
-            self._last_sample = bytes()
-            phrase_complete = True
-
-        self.phrase_time = now
-
+    def _transcribe_text(self) -> str:
         while not self.data_queue.empty():
             data = self.data_queue.get()
             self._last_sample += data
@@ -113,14 +108,33 @@ class SpeechToTextWhisper:
         # Read the transcription.
         result = self.audio_model.transcribe(self.temp_file, fp16=torch.cuda.is_available(), language=self.language)
         text = result['text'].strip()
+        return text
 
-        # this means we are still listening?
-        if phrase_complete:
-            if self.on_phrase_recognized is not None and text != "":
-                self.on_phrase_recognized(text)
-        else:
-            if self.on_text_recognized is not None and text != "":
-                self.on_text_recognized(text)
+    def _analyze_audio(self):
+        now = datetime.utcnow()
+
+        # check if new data has arrived
+        if self.data_queue.empty():
+            # fire text-detection event
+            if self.phrase_has_timed_out and not self._transcription_published:
+                self._transcription_published = True
+                if self.on_text_recognized is not None and self._transcription != "":
+                    self.on_text_recognized(self._transcription_id, self._transcription)
+            return
+
+        if self.phrase_has_timed_out:
+            # new transcription starts
+            self._last_sample = bytes()
+            self._transcription_published = False
+            self._transcription_id += 1
+
+        self.phrase_start_ts = now
+
+        text = self._transcribe_text()
+        self._transcription = text
+
+        if self.on_partial_text_recognized is not None and text != "":
+            self.on_partial_text_recognized(self._transcription_id, text)
 
     def _init_audio(self):
         self.source = sr.Microphone(sample_rate=16000)
@@ -156,3 +170,8 @@ class SpeechToTextWhisper:
             return torch.device("cuda")
 
         return torch.device("cpu")
+
+    @property
+    def phrase_has_timed_out(self) -> bool:
+        now = datetime.utcnow()
+        return now - self.phrase_start_ts > timedelta(seconds=self.phrase_timeout)

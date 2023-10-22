@@ -32,12 +32,12 @@ def main():
 
     osc_client = udp_client.SimpleUDPClient(args.osc_server, args.osc_port)
 
-    def on_phrase_recognized(text: str):
-        osc_client.send_message("/stt/partial-text", text)
+    def on_partial_text_recognized(index: int, text: str):
+        osc_client.send_message("/stt/partial-text", [index, text])
         console.print(f"{text}", style="blue")
 
-    def on_text_recognized(text: str):
-        osc_client.send_message("/stt/text", text)
+    def on_text_recognized(index: int, text: str):
+        osc_client.send_message("/stt/text", [index, text])
         console.print(f"{text}", style="green bold")
 
     with console.status(f"starting whisper model {args.model} for language {args.language}"):
@@ -50,7 +50,7 @@ def main():
         stt_transcriber.setup()
 
     stt_transcriber.on_text_recognized = on_text_recognized
-    stt_transcriber.on_phrase_recognized = on_phrase_recognized
+    stt_transcriber.on_partial_text_recognized = on_partial_text_recognized
     stt_transcriber.run()
 
 
