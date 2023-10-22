@@ -1,0 +1,14 @@
+# torch
+--extra-index-url https://download.pytorch.org/whl/cu118
+torch
+
+# audio
+pyaudio~=0.2.13
+SpeechRecognition~=3.10.0
+openai-whisper==20230918
+
+# ui
+rich~=13.6.0
+
+# osc
+python-osc~=1.8.3
