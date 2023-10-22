@@ -1,17 +1,6 @@
 import argparse
-import io
-import os
-import re
-import speech_recognition as sr
-import whisper
-import torch
 
-from datetime import datetime, timedelta
-from queue import Queue
-from tempfile import NamedTemporaryFile
-from time import sleep
-from sys import platform
-
+from pythonosc import udp_client
 from rich.console import Console
 
 from SpeechToTextWhisper import SpeechToTextWhisper, WhisperModel
@@ -31,14 +20,27 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--phrase-timeout", default=3,
                         help="How much empty space between recordings before the message is sent", type=float)
 
+    parser.add_argument("--osc-server", default="127.0.0.1", help="The ip of the OSC server")
+    parser.add_argument("--osc-port", type=int, default=8000, help="OSC output port.")
+
     return parser.parse_args()
 
 
 def main():
+    console = Console()
     args = parse_arguments()
 
-    console = Console()
-    with console.status("loading model"):
+    osc_client = udp_client.SimpleUDPClient(args.osc_server, args.osc_port)
+
+    def on_phrase_recognized(text: str):
+        osc_client.send_message("/stt/partial-text", text)
+        console.print(f"{text}", style="blue")
+
+    def on_text_recognized(text: str):
+        osc_client.send_message("/stt/text", text)
+        console.print(f"{text}", style="green bold")
+
+    with console.status(f"starting whisper model {args.model} for language {args.language}"):
         stt_transcriber = SpeechToTextWhisper(model=WhisperModel.from_text(args.model),
                                               language=args.language,
                                               energy_threshold=args.energy_threshold,
@@ -47,6 +49,8 @@ def main():
 
         stt_transcriber.setup()
 
+    stt_transcriber.on_text_recognized = on_text_recognized
+    stt_transcriber.on_phrase_recognized = on_phrase_recognized
     stt_transcriber.run()
 
 

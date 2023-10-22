@@ -54,19 +54,17 @@ class SpeechToTextWhisper:
         self.source: Optional[sr.AudioFile, sr.Microphone] = None
 
         self.temp_file = NamedTemporaryFile().name
-        self.transcription = [""]
 
         self._running = False
 
         self._last_sample = bytes()
 
         # events
-        self.on_partial_text_recognized: Optional[Callable[[str], None]] = None
         self.on_text_recognized: Optional[Callable[[str], None]] = None
+        self.on_phrase_recognized: Optional[Callable[[str], None]] = None
 
     def setup(self):
         self.temp_file = NamedTemporaryFile().name
-        self.transcription = [""]
 
         self._load_model()
         self._init_audio()
@@ -116,23 +114,13 @@ class SpeechToTextWhisper:
         result = self.audio_model.transcribe(self.temp_file, fp16=torch.cuda.is_available(), language=self.language)
         text = result['text'].strip()
 
-        # If we detected a pause between recordings, add a new item to our transcripion.
-        # Otherwise edit the existing one.
+        # this means we are still listening?
         if phrase_complete:
-            self.transcription.append(text)
-            if self.on_text_recognized is not None:
-                self.on_text_recognized(text)
+            if self.on_phrase_recognized is not None and text != "":
+                self.on_phrase_recognized(text)
         else:
-            self.transcription[-1] = text
-            if self.on_partial_text_recognized is not None:
-                self.on_partial_text_recognized(text)
-
-        # Clear the console to reprint the updated transcription.
-        os.system('cls' if os.name == 'nt' else 'clear')
-        for line in self.transcription:
-            print(line)
-        # Flush stdout.
-        print('', end='', flush=True)
+            if self.on_text_recognized is not None and text != "":
+                self.on_text_recognized(text)
 
     def _init_audio(self):
         self.source = sr.Microphone(sample_rate=16000)
