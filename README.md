@@ -1,6 +1,8 @@
 # Speech to Text Whisper OSC
 This application is designed to transcribe speech to text using the Whisper ASR (Automatic Speech Recognition) model and send the transcribed text to an OSC (Open Sound Control) server. It provides various options to configure the transcription process and OSC communication.
 
+![Example](images/tts-demo.gif)
+
 ### Installation
 Create a virtual environment for python (version `>=3.8`) and install the requirements. Currently, the audio part only supports MacOS and Windows.
 
