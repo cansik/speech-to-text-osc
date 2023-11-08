@@ -7,6 +7,7 @@ pyaudio~=0.2.13
 SpeechRecognition~=3.10.0
 openai-whisper==20230918
 soundfile~=0.12.1
+faster-whisper~=0.9.0
 
 # ui
 rich~=13.6.0

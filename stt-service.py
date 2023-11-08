@@ -12,12 +12,13 @@ def parse_arguments() -> argparse.Namespace:
                         choices=["tiny", "base", "small", "medium", "large"])
     parser.add_argument("--language", type=str, default="en",
                         help="Language code to decode (ISO 639-1 format).")
+    parser.add_argument("--faster", action="store_true", help="Use faster-whisper audio transcription.")
 
     parser.add_argument("--energy-threshold", default=1000,
                         help="Energy level for mic to detect.", type=int)
-    parser.add_argument("--record-timeout", default=2,
+    parser.add_argument("--record-timeout", default=0.5,
                         help="How real time the recording is in seconds.", type=float)
-    parser.add_argument("--phrase-timeout", default=3,
+    parser.add_argument("--phrase-timeout", default=1.2,
                         help="How much empty space between recordings before the message is sent", type=float)
 
     parser.add_argument("--osc-server", default="127.0.0.1", help="The ip of the OSC server")
