@@ -22,6 +22,7 @@ class WhisperModel(Enum):
     Small = "small"
     Medium = "medium"
     Large = "large"
+    LargeV2 = "large-v2"
 
     @staticmethod
     def from_text(model_name: str) -> "WhisperModel":
@@ -179,7 +180,7 @@ class SpeechToTextWhisper:
     def _load_model(self) -> None:
         model_name: str = self.model.value
 
-        if self.language == "en" and model_name != "large":
+        if self.language == "en" and "large" not in model_name:
             model_name = f"{model_name}.en"
 
         if self.use_faster_whisper:
