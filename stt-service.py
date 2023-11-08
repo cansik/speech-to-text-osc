@@ -3,16 +3,17 @@ import argparse
 from pythonosc import udp_client
 from rich.console import Console
 
-from SpeechToTextWhisper import SpeechToTextWhisper, WhisperModel, TextRecognitionEvent
+from SpeechToTextWhisper import SpeechToTextWhisper, WhisperModelType, TextRecognitionEvent, WHISPER_BACKENDS
 
 
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", type=str, default="tiny", help="Model to use",
-                        choices=["tiny", "base", "small", "medium", "large", "large-v2"])
+    parser.add_argument("--model", type=str, default=WhisperModelType.Base.value, help="Model to use.",
+                        choices=[t.value for t in WhisperModelType])
     parser.add_argument("--language", type=str, default="en",
                         help="Language code to decode (ISO 639-1 format).")
-    parser.add_argument("--faster", action="store_true", help="Use faster-whisper audio transcription.")
+    parser.add_argument("--backend", type=str, default=list(WHISPER_BACKENDS.keys())[0],
+                        help="Backend to use.", choices=[k for k in WHISPER_BACKENDS.keys()])
 
     parser.add_argument("--energy-threshold", default=1000,
                         help="Energy level for mic to detect.", type=int)
@@ -31,12 +32,16 @@ def main():
     console = Console()
     args = parse_arguments()
 
+    backend_type = WHISPER_BACKENDS[args.backend]
+
     osc_client = udp_client.SimpleUDPClient(args.osc_server, args.osc_port)
 
     def on_partial_text_recognized(event: TextRecognitionEvent):
         osc_client.send_message("/stt/partial-text",
                                 [event.index, event.timestamp.isoformat(), event.text])
-        console.print(f"{event.text}", style="blue")
+
+        inference_time_ms = round(event.inference_time * 1000)
+        console.print(f"[italic]{inference_time_ms}ms:[/italic] {event.text}", style="blue")
 
     def on_text_recognized(event: TextRecognitionEvent):
         osc_client.send_message("/stt/text",
@@ -44,14 +49,13 @@ def main():
         ts_str = event.timestamp.strftime("%H:%M:%S")
         console.print(f"{ts_str}: {event.text}", style="green bold")
 
-    model_type = "faster-whisper" if args.faster else "whisper"
-    with console.status(f"starting {model_type} model {args.model} for language {args.language}"):
-        stt_transcriber = SpeechToTextWhisper(model=WhisperModel.from_text(args.model),
+    with console.status(f"starting whisper model {args.model} ({args.backend}) for language {args.language}"):
+        stt_transcriber = SpeechToTextWhisper(model=WhisperModelType.from_text(args.model),
                                               language=args.language,
                                               energy_threshold=args.energy_threshold,
                                               record_timeout=args.record_timeout,
                                               phrase_timeout=args.phrase_timeout,
-                                              use_faster_whisper=args.faster)
+                                              whisper_backend=backend_type)
 
         stt_transcriber.setup()
 

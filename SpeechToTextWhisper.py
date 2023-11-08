@@ -1,11 +1,12 @@
 import io
-import logging
 import time
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
+from pathlib import Path
 from queue import Queue
-from typing import Optional, Union, Callable
+from typing import Optional, Union, Callable, Type, Dict
 
 import faster_whisper
 import numpy as np
@@ -13,10 +14,11 @@ import soundfile as sf
 import speech_recognition as sr
 import torch
 import whisper
-from whisper import Whisper
+import whispercpp
+from huggingface_hub import hf_hub_download
 
 
-class WhisperModel(Enum):
+class WhisperModelType(Enum):
     Tiny = "tiny"
     Base = "base"
     Small = "small"
@@ -25,11 +27,85 @@ class WhisperModel(Enum):
     LargeV2 = "large-v2"
 
     @staticmethod
-    def from_text(model_name: str) -> "WhisperModel":
-        for model in WhisperModel:
+    def from_text(model_name: str) -> "WhisperModelType":
+        for model in WhisperModelType:
             if model.value == model_name:
                 return model
-        raise ValueError(f"No matching WhisperModel for model name: {model_name}")
+        raise ValueError(f"No matching WhisperModelType for model name: {model_name}")
+
+
+class WhisperBackend(ABC):
+
+    @abstractmethod
+    def __init__(self, model_name: str, device: str):
+        pass
+
+    @abstractmethod
+    def transcribe(self, audio_data: np.ndarray, language: Optional[str] = None) -> str:
+        pass
+
+
+WHISPER_BACKENDS: Dict[str, Type[WhisperBackend]] = {}
+
+
+class OpenAIWhisperBackend(WhisperBackend):
+
+    def __init__(self, model_name: str, device: str):
+        self.model = whisper.load_model(model_name, device=device)
+
+    def transcribe(self, audio_data: np.ndarray, language: Optional[str] = None) -> str:
+        result = self.model.transcribe(audio_data, fp16=torch.cuda.is_available(), language=language)
+        text = result['text'].strip()
+        return text
+
+
+WHISPER_BACKENDS["openai"] = OpenAIWhisperBackend
+
+
+class FasterWhisperBackend(WhisperBackend):
+
+    def __init__(self, model_name: str, device: str):
+        if torch.cuda.is_available():
+            self.model = faster_whisper.WhisperModel(model_name, device="cuda", compute_type="float16")
+        else:
+            self.model = faster_whisper.WhisperModel(model_name, device="cpu", compute_type="int8")
+
+    def transcribe(self, audio_data: np.ndarray, language: Optional[str] = None) -> str:
+        segments, info = self.model.transcribe(audio_data, language=language, beam_size=5)
+        text = "".join([s.text for s in segments]).strip()
+        return text
+
+
+WHISPER_BACKENDS["faster"] = FasterWhisperBackend
+
+
+class WhisperCPPBackend(WhisperBackend):
+
+    def __init__(self, model_name: str, device: str):
+        model_path = Path(hf_hub_download(repo_id="ggerganov/whisper.cpp", filename=f"ggml-{model_name}.bin"))
+        self.model: whispercpp.Whisper = object.__new__(whispercpp.Whisper)
+
+        # init model manually because currently it is not possible to load a local models with the pip version 0.0.17
+        # https://github.com/aarnphm/whispercpp/issues/126
+        no_state = False
+        self.model.context = whispercpp.api.Context.from_file(str(model_path), no_state=no_state)
+        params = (  # noqa # type: ignore
+            whispercpp.api.Params.from_enum(whispercpp.api.SAMPLING_GREEDY)
+            .with_print_progress(False)
+            .with_print_realtime(False)
+            .build()
+        )
+        self.model.context.reset_timings()
+        self.model._context_initialized = not no_state
+        self.model._transcript = []
+        self.model.__dict__.update(locals())
+
+    def transcribe(self, audio_data: np.ndarray, language: Optional[str] = None) -> str:
+        result = self.model.transcribe(audio_data)
+        return result.strip()
+
+
+WHISPER_BACKENDS["cpp"] = WhisperCPPBackend
 
 
 @dataclass
@@ -37,26 +113,28 @@ class TextRecognitionEvent:
     index: int
     timestamp: datetime
     text: str
+    inference_time: float = 0.0
 
 
 class SpeechToTextWhisper:
-    def __init__(self, model: WhisperModel,
+    def __init__(self, model: WhisperModelType,
                  language: str = "en",
                  energy_threshold: float = 1000,
                  record_timeout: float = 2.0,
                  phrase_timeout: float = 3.0,
                  device: Optional[Union[str, torch.device]] = None,
-                 use_faster_whisper: bool = False):
+                 whisper_backend: Type[WhisperBackend] = OpenAIWhisperBackend):
         self.phrase_start_ts: datetime = datetime.now()
         self.last_sample = bytes()
         self.data_queue = Queue()
 
         self.model = model
-        self.audio_model: Optional[Union[Whisper, faster_whisper.WhisperModel]] = None
+
+        self.whisper_backend = whisper_backend
+        self.audio_model: Optional[WhisperBackend] = None
+
         self.device = device if device is not None else self._current_device()
         self.language = language
-
-        self.use_faster_whisper = use_faster_whisper
 
         self.record_timeout = record_timeout
         self.phrase_timeout = phrase_timeout
@@ -70,6 +148,7 @@ class SpeechToTextWhisper:
         self._running = False
 
         self._last_sample = bytes()
+        self._last_inference_time: float = 0
         self._transcription: str = ""
         self._transcription_id: int = -1
         self._transcription_start_ts: Optional[datetime] = None
@@ -108,7 +187,6 @@ class SpeechToTextWhisper:
             data = self.data_queue.get()
             self._last_sample += data
 
-        start_ts = time.time()
         # Use AudioData to convert the raw data to wav data.
         audio_data = sr.AudioData(self._last_sample, self.source.SAMPLE_RATE, self.source.SAMPLE_WIDTH)
 
@@ -118,16 +196,7 @@ class SpeechToTextWhisper:
         audio_array = audio_array.astype(np.float32)
 
         # Read the transcription.
-        if isinstance(self.audio_model, faster_whisper.WhisperModel):
-            segments, info = self.audio_model.transcribe(audio_array, language=self.language, beam_size=5)
-            text = "".join([s.text for s in segments]).strip()
-        else:
-            result = self.audio_model.transcribe(audio_array, fp16=torch.cuda.is_available(), language=self.language)
-            text = result['text'].strip()
-
-        end_ts = time.time()
-        logging.info(f"Time to transcribe: {end_ts - start_ts}")
-
+        text = self.audio_model.transcribe(audio_array, language=self.language)
         return text
 
     def _analyze_audio(self):
@@ -140,7 +209,8 @@ class SpeechToTextWhisper:
                 self._transcription_published = True
                 if self.on_text_recognized is not None and self._transcription != "":
                     self.on_text_recognized(
-                        TextRecognitionEvent(self._transcription_id, self._transcription_start_ts, self._transcription)
+                        TextRecognitionEvent(self._transcription_id, self._transcription_start_ts,
+                                             self._transcription, self._last_inference_time)
                     )
             return
 
@@ -153,12 +223,18 @@ class SpeechToTextWhisper:
 
         self.phrase_start_ts = now
 
+        start_ts = time.time()
         text = self._transcribe_text()
+        end_ts = time.time()
+
+        self._last_inference_time = end_ts - start_ts
+
         self._transcription = text
 
         if self.on_partial_text_recognized is not None and text != "":
             self.on_partial_text_recognized(
-                TextRecognitionEvent(self._transcription_id, self._transcription_start_ts, self._transcription)
+                TextRecognitionEvent(self._transcription_id, self._transcription_start_ts,
+                                     self._transcription, self._last_inference_time)
             )
 
     def _init_audio(self):
@@ -183,13 +259,7 @@ class SpeechToTextWhisper:
         if self.language == "en" and "large" not in model_name:
             model_name = f"{model_name}.en"
 
-        if self.use_faster_whisper:
-            if torch.cuda.is_available():
-                self.audio_model = faster_whisper.WhisperModel(model_name, device="cuda", compute_type="float16")
-            else:
-                self.audio_model = faster_whisper.WhisperModel(model_name, device="cpu", compute_type="int8")
-        else:
-            self.audio_model = whisper.load_model(model_name, device=self.device)
+        self.audio_model = self.whisper_backend(model_name, self.device)
 
     @staticmethod
     def _current_device() -> torch.device:
