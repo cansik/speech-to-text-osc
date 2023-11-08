@@ -25,7 +25,7 @@ python stt-service.py
 
 - `--language`: Set the language code for speech decoding in ISO 639-1 format.
 
-- `--faster`: Use faster-whisper for audio transcription.
+- `--faster`: Use faster-whisper for audio transcription (best for CPU inference).
 
 - `--energy-threshold`: Define the energy level for the microphone to detect. Default is `1000`.
 
