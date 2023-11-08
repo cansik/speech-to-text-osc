@@ -4,9 +4,10 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
 from queue import Queue
-from tempfile import NamedTemporaryFile
 from typing import Optional, Union, Callable
 
+import numpy as np
+import soundfile as sf
 import speech_recognition as sr
 import torch
 import whisper
@@ -60,8 +61,6 @@ class SpeechToTextWhisper:
 
         self.source: Optional[sr.AudioFile, sr.Microphone] = None
 
-        self.temp_file = NamedTemporaryFile().name
-
         self._running = False
 
         self._last_sample = bytes()
@@ -75,8 +74,6 @@ class SpeechToTextWhisper:
         self.on_partial_text_recognized: Optional[Callable[[TextRecognitionEvent], None]] = None
 
     def setup(self):
-        self.temp_file = NamedTemporaryFile().name
-
         self._load_model()
         self._init_audio()
 
@@ -107,14 +104,14 @@ class SpeechToTextWhisper:
 
         # Use AudioData to convert the raw data to wav data.
         audio_data = sr.AudioData(self._last_sample, self.source.SAMPLE_RATE, self.source.SAMPLE_WIDTH)
-        wav_data = io.BytesIO(audio_data.get_wav_data())
 
-        # Write wav data to the temporary file as bytes.
-        with open(self.temp_file, 'w+b') as f:
-            f.write(wav_data.read())
+        wav_bytes = audio_data.get_wav_data(convert_rate=16000)
+        wav_stream = io.BytesIO(wav_bytes)
+        audio_array, sampling_rate = sf.read(wav_stream)
+        audio_array = audio_array.astype(np.float32)
 
         # Read the transcription.
-        result = self.audio_model.transcribe(self.temp_file, fp16=torch.cuda.is_available(), language=self.language)
+        result = self.audio_model.transcribe(audio_array, fp16=torch.cuda.is_available(), language=self.language)
         text = result['text'].strip()
         return text
 
