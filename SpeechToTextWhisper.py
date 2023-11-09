@@ -1,4 +1,6 @@
 import io
+import pkgutil
+import re
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -16,6 +18,25 @@ import torch
 import whisper
 import whispercpp
 from huggingface_hub import hf_hub_download
+
+# patch whisper on file not find error
+# https://github.com/carloscdias/whisper-cpp-python/pull/12
+try:
+    import whisper_cpp_python
+except FileNotFoundError:
+    regex = r"(\"darwin\":\n\s*lib_ext = \")\.so(\")"
+    subst = "\\1.dylib\\2"
+
+    print("fixing and re-importing whisper_cpp_python...")
+    # load whisper_cpp_python and substitute .so with .dylib for darwin
+    package = pkgutil.get_loader("whisper_cpp_python")
+    whisper_path = Path(package.path)
+    whisper_cpp_py = whisper_path.parent.joinpath("whisper_cpp.py")
+    content = whisper_cpp_py.read_text()
+    result = re.sub(regex, subst, content, 0, re.MULTILINE)
+    whisper_cpp_py.write_text(result)
+
+    import whisper_cpp_python
 
 
 class WhisperModelType(Enum):
@@ -106,6 +127,24 @@ class WhisperCPPBackend(WhisperBackend):
 
 
 WHISPER_BACKENDS["cpp"] = WhisperCPPBackend
+
+
+class WhisperCPP2Backend(WhisperBackend):
+
+    def __init__(self, model_name: str, device: str):
+        model_path = Path(hf_hub_download(repo_id="ggerganov/whisper.cpp", filename=f"ggml-{model_name}.bin"))
+        self.model = whisper_cpp_python.Whisper(str(model_path.absolute()))
+
+    def transcribe(self, audio_data: np.ndarray, language: Optional[str] = None) -> str:
+        # hacky solution to directly send numpy data
+        self.model.params.language = language.encode('utf-8')
+        self.model.params.temperature = 0.8
+        result = self.model._full(audio_data)
+        response = self.model._parse_format(result, "text")
+        return response.strip()
+
+
+WHISPER_BACKENDS["cpp2"] = WhisperCPP2Backend
 
 
 @dataclass
