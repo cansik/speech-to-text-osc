@@ -36,6 +36,8 @@ python stt-service.py
   from "[openai](https://github.com/openai/whisper)", "[faster](https://github.com/guillaumekln/faster-whisper)"
   and "[cpp](https://github.com/aarnphm/whispercpp)".
 
+- `--audio-device`: Audio device id (`int`). If none is provided, default is used.
+
 - `--energy-threshold`: Define the energy level for the microphone to detect. Default is `1000`.
 
 - `--record-timeout`: Set the real-time recording duration in seconds. Default is `0.5`.

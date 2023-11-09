@@ -1,5 +1,6 @@
 import argparse
 
+import pyaudio
 from pythonosc import udp_client
 from rich.console import Console
 
@@ -15,6 +16,13 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--backend", type=str, default=list(WHISPER_BACKENDS.keys())[0],
                         help="Backend to use.", choices=[k for k in WHISPER_BACKENDS.keys()])
 
+    # find current devices
+    context = pyaudio.PyAudio()
+    devices = {i: context.get_device_info_by_index(i)["name"] for i in range(context.get_device_count())}
+    microphone_names = ", ".join([f"{i}={n}" for i, n in devices.items()])
+
+    parser.add_argument("--audio-device", type=int, default=None,
+                        help=f"Audio input id, one of [{microphone_names}].")
     parser.add_argument("--energy-threshold", default=1000,
                         help="Energy level for mic to detect.", type=int)
     parser.add_argument("--record-timeout", default=0.5,
@@ -55,7 +63,8 @@ def main():
                                               energy_threshold=args.energy_threshold,
                                               record_timeout=args.record_timeout,
                                               phrase_timeout=args.phrase_timeout,
-                                              whisper_backend=backend_type)
+                                              whisper_backend=backend_type,
+                                              audio_device_index=args.audio_device)
 
         stt_transcriber.setup()
 

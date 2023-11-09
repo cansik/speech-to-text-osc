@@ -123,7 +123,8 @@ class SpeechToTextWhisper:
                  record_timeout: float = 2.0,
                  phrase_timeout: float = 3.0,
                  device: Optional[Union[str, torch.device]] = None,
-                 whisper_backend: Type[WhisperBackend] = OpenAIWhisperBackend):
+                 whisper_backend: Type[WhisperBackend] = OpenAIWhisperBackend,
+                 audio_device_index: Optional[int] = None):
         self.phrase_start_ts: datetime = datetime.now()
         self.last_sample = bytes()
         self.data_queue = Queue()
@@ -144,6 +145,7 @@ class SpeechToTextWhisper:
         self.recorder.dynamic_energy_threshold = False
 
         self.source: Optional[sr.AudioFile, sr.Microphone] = None
+        self.audio_device_index = audio_device_index
 
         self._running = False
 
@@ -238,9 +240,12 @@ class SpeechToTextWhisper:
             )
 
     def _init_audio(self):
-        self.source = sr.Microphone(sample_rate=16000)
+        self.source = sr.Microphone(device_index=self.audio_device_index, sample_rate=16000)
 
         with self.source:
+            if self.source.stream is None:
+                raise Exception(f"Could not start audio device {self.audio_device_index}.")
+
             self.recorder.adjust_for_ambient_noise(self.source)
 
         def record_callback(_, audio: sr.AudioData) -> None:
